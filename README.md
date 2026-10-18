@@ -14,8 +14,9 @@ The dynarec is *fully* vibe-coded using GPT-5.5 / Opus 4.8, and later GPT-5.6 So
 - Three display sizes and three scaling filters
 - Automatic and manual frameskip
 - Configurable GBA controls and emulator hotkeys
-- 10 per-game savestate slots
+- 10 per-game savestate slots, plus Save+Exit to save and quit in one step
 - Persistent SRAM, Flash, and EEPROM in-game saves
+- CodeBreaker cheats loaded from a `.cht` file next to each ROM
 - Cartridge RTC support for games with time-based events
 - Fast-forward and an optional FPS overlay
 - Bundled open-source GBA BIOS; no separate BIOS file is required
@@ -74,7 +75,7 @@ Want a different layout? You can remap every GBA button under **CONFIGURE GAMEPA
 | R           | `END`             |
 | gpSP menu   | `ON`              |
 
-You can also assign hotkeys for **Fast Forward**, **Load State**, **Save State**, and **Display FPS**. **Save+Exit** appears in the menu, but it is not implemented yet.
+You can also assign hotkeys for **Fast Forward**, **Load State**, **Save State**, **Save+Exit**, and **Display FPS**.
 
 ## Display modes
 
@@ -106,15 +107,37 @@ To make sure your latest progress is written safely, use **EXIT GPSP**, press `M
 
 Savestates are stored in ROM-named `.SVS` files. Choose a slot from 0 to 9, then select **SAVE STATE TO SLOT** or **LOAD STATE FROM SLOT**. If you prefer, you can assign quick-save and quick-load hotkeys for the currently selected slot.
 
-gpSP forms save filenames from the first six alphanumeric characters in the ROM filename. Make those six characters unique for each game so that two ROMs do not accidentally share the same save files.
+**SAVE STATE AND EXIT** (in the menu, or as the **Save+Exit** hotkey) saves a state to the selected slot, writes the in-game save, and closes gpSP. If the state cannot be written, for example because storage is full, gpSP stays open so nothing is lost.
+
+### Save file names
+
+Each game's files share a 7-character name: the first four letters or digits of the ROM filename, then a three-character code worked out from the full filename. For `Pokemon FireRed.gba` that looks like `POKExxx.SAV` for the in-game save and `POKExxx0.SVS` to `POKExxx9.SVS` for savestates. Two ROMs whose names start the same, such as `Pokemon FireRed` and `Pokemon Emerald`, therefore always get their own files. Renaming a ROM changes its code, so rename its save files to match, or keep the ROM's name.
+
+Older releases used only the first six letters or digits (`POKEMO.SAV`). gpSP still finds those files: when a game has no save under its new name, it loads the old one and writes it under the new name when you exit or change games. The old file is left in place. This only happens when exactly one ROM on the calculator maps to that old name, because a shared old file could belong to either game. If two of your ROMs shared an old name, the old file holds whichever game saved last. To keep it, start that game and save once so its new file appears in storage, then replace the new file with the old one under the new name.
 
 Savestates may not work across different gpSP releases, so regular in-game saves are the safer choice for long-term progress.
+
+## Cheats
+
+gpSP loads cheats from a text file with the same name as the ROM and a `.cht` extension, placed next to it: `Pokemon Emerald.gba` reads `Pokemon Emerald.cht`. Open **CHEATS AND MISC OPTIONS** to see what was loaded, and press `EXE`, Left or Right on a cheat to switch it on or off. The first 10 cheats in the file are used. Cheats start switched off unless the file says otherwise, and they are read again whenever a game is loaded or restarted.
+
+Only unencrypted CodeBreaker codes are supported: each code is an 8-digit address followed by a 4-digit value, such as `82025D98 03E7`. GameShark and Action Replay codes (8 + 8 digits) and encrypted CodeBreaker codes are listed as unsupported rather than loaded. Write one cheat per line as `Name: codes`, or put the name on its own line with the codes on the lines below it. A `+` in front of the name switches the cheat on when the game loads, and lines starting with `#` are comments:
+
+```text
+# Layout example: the codes below are placeholders, not real cheats
+Infinite money: 83005E3C 423F 83005E3E 000F
++Walk through walls
+82005074 0000
+82005076 0000
+```
+
+libretro `.cht` files (`cheat0_desc`, `cheat0_code`, `cheat0_enable`) also work, as long as their codes are unencrypted CodeBreaker codes.
 
 ## Notes and current limitations
 
 - There is no sound support yet.
-- The Cheats menu is present, but the cheat loader is not implemented.
-- `Save+Exit`, link cable, wireless, netplay, and rumble are not supported.
+- Only unencrypted CodeBreaker cheats are supported, up to 10 per game.
+- Link cable, wireless, netplay, and rumble are not supported.
 - Not every game will work perfectly.
 - The built-in overclock is active only while gpSP is running. gint restores the calculator's previous clock settings when gpSP exits or calls the OS.
 
@@ -164,6 +187,13 @@ fxsdk build-cg
 The resulting add-in is `ports/fxcg100/gint-gpsp/gpSP.g3a`.
 
 Developers can find the SH-4 JIT design, BIOS/SWI implementation, performance history, and test procedures in the [technical documentation](docs/README.md).
+
+The host-side tests need only a C compiler; GitHub Actions runs them on every push with GCC and Clang. The encoder audit also needs SH binutils (`sh-elf-as` by default):
+
+```sh
+make -C tests
+make -C tests SH_AS=sh4-linux-gnu-as SH_OBJCOPY=sh4-linux-gnu-objcopy   # other SH binutils
+```
 
 ## Credits and license
 
