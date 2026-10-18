@@ -2,6 +2,8 @@
 #
 #   make -C tests          # build + run all
 #   make -C tests audit    # only the sh-elf-as differential audit
+#   make -C tests SH_AS=sh4-linux-gnu-as SH_OBJCOPY=sh4-linux-gnu-objcopy
+#                          # run the audit with another SH binutils (CI)
 #   make -C tests rtc      # Pokemon-style cartridge GPIO/RTC protocol
 #
 # Run from the repository root context; the test sources include the encoder via
@@ -11,6 +13,8 @@ CC      ?= cc
 CFLAGS  ?= -std=c11 -Wall -Wextra
 CXX     ?= c++
 CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2
+SH_AS      ?= sh-elf-as
+SH_OBJCOPY ?= sh-elf-objcopy
 ROOT    := ..
 BIN     := /tmp/cgba-sh4
 comma   := ,
@@ -271,10 +275,10 @@ video-backdrop-shadow: $(ROOT)/tests/video_backdrop_shadow_test.cc \
 	  -o $(BIN)-video-backdrop-shadow
 	$(BIN)-video-backdrop-shadow
 
-# Requires sh-elf-as + sh-elf-objcopy on PATH.
+# Requires SH binutils on PATH: sh-elf-as + sh-elf-objcopy by default.
 audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/sh4_codegen_audit.c -o $(BIN)-audit
-	$(BIN)-audit
+	SH_AS="$(SH_AS)" SH_OBJCOPY="$(SH_OBJCOPY)" $(BIN)-audit
 
 clean:
 	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-native-ldst \
