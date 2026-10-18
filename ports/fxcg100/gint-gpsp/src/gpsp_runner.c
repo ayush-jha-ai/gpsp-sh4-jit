@@ -9,6 +9,7 @@
 #include <streams/file_stream.h>
 
 #include "fxcg100_platform.h"
+#include "fxcg100_gamefiles.h"
 #include "nor_rom.h"
 #include "vendor/gpsp/common.h"
 #include "vendor/gpsp/gba_memory.h"
@@ -246,7 +247,13 @@ static uint32_t cgba_storage_generation_seen;
 static int cgba_lcd_test_active;
 static int cgba_mode3_debug_copy_active;
 static unsigned cgba_loaded_rom_id;
+/* Fixed when the ROM loads: shutdown clears the ROM path before the final
+ * backup flush, and the name must not change between load and flush. */
+static char cgba_save_base_name[FXCG100_SAVE_BASE_LEN + 1];
 static uint16_t *cgba_active_framebuffer;
+
+static void cgba_cheats_reset(void);
+static void cgba_gpsp_cheats_load(void);
 
 static void debug_line(fxcg100_debug_info *debug, const char *fmt, ...)
 {
@@ -643,6 +650,9 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 	cgba_lcd_test_active = rom ? rom->lcd_test : 0;
 	cgba_mode3_debug_copy_active = rom ? rom->mode3_debug_copy : 0;
 	cgba_loaded_rom_id = rom_id;
+	fxcg100_save_base(cgba_save_base_name, cgba_gpsp_rom_name(rom_id),
+		nor_entry ? nor_entry->path : NULL);
+	cgba_cheats_reset();
 
 	if(rom && rom->lcd_test)
 		return 0;
@@ -698,6 +708,7 @@ int cgba_gpsp_init(uint16_t *framebuffer, unsigned rom_id)
 	sprite_limit = 1;
 	reset_gba();
 	cgba_gpsp_backup_load();   /* restore the game's in-cart save, if any */
+	cgba_gpsp_cheats_load();   /* <ROM>.cht, if present */
 	return 0;
 }
 
@@ -1060,36 +1071,51 @@ int cgba_state_decompress(const u8 *in, unsigned insz, u8 *raw, unsigned rawsz)
 	return i == n;
 }
 
-/* Per-ROM savestate names: "<BASE><slot>.SVS" where BASE = up to 6 filtered
- * chars of the loaded ROM's label, so different games keep separate slots.
- * Legacy fixed-name CGBAST<slot>.SAV files are still tried on load. */
+/* Per-ROM savestate names: "<BASE><slot>.SVS", BASE from fxcg100_save_base()
+ * (4 letters/digits of the ROM label + a hash of its file name), so games
+ * whose names start the same keep separate slots. Older names are still
+ * tried on load: the 6-character "<LABEL6><slot>.SVS" when no other ROM
+ * shares it, then the fixed-name CGBAST<slot>.SAV. */
+#define CGBA_SAVE_PATH_MAX 24
+
 static void cgba_state_path(uint16_t *path, unsigned slot)
 {
-	static const char prefix[] = "\\\\fls0\\";
-	const char *nm = cgba_gpsp_rom_name(cgba_loaded_rom_id);
-	char base[7];
-	unsigned i, b = 0;
+	char suffix[] = "0.SVS";
 
-	for (i = 0; nm && nm[i] && nm[i] != '.' && b < 6; i++) {
-		char c = nm[i];
-		if (c >= 'a' && c <= 'z')
-			c = (char)(c - 'a' + 'A');
-		if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
-			base[b++] = c;
-	}
-	if (b == 0) {
-		base[0] = 'C'; base[1] = 'G'; base[2] = 'B'; base[3] = 'A';
-		b = 4;
-	}
-	base[b] = 0;
+	suffix[0] = (char)('0' + (slot % 10));
+	fxcg100_storage_path(path, CGBA_SAVE_PATH_MAX, cgba_save_base_name, suffix);
+}
 
-	for (i = 0; prefix[i]; i++)
-		path[i] = (uint16_t)prefix[i];
-	for (b = 0; base[b]; b++)
-		path[i++] = (uint16_t)base[b];
-	path[i++] = (uint16_t)('0' + (slot % 10));
-	path[i++] = '.'; path[i++] = 'S'; path[i++] = 'V'; path[i++] = 'S';
-	path[i] = 0;
+/* The 6-character names used before hashing are trusted only when exactly
+ * one ROM in storage maps to that name; otherwise the file may belong to
+ * another game (two ROMs used to overwrite each other's saves this way). */
+static int cgba_legacy_save_base(char *base, const char *fallback)
+{
+	char other[FXCG100_SAVE_BASE_LEGACY_LEN + 1];
+	unsigned owners = 0;
+
+	fxcg100_save_base_legacy(base, cgba_gpsp_rom_name(cgba_loaded_rom_id), "");
+	if (!base[0] || cgba_loaded_rom_id < CGBA_GPSP_ROM_BUILTIN_COUNT)
+		return 0;
+	ensure_storage_roms_scanned();
+	for (unsigned i = 0; i < cgba_storage_roms.count; i++) {
+		fxcg100_save_base_legacy(other, cgba_storage_roms.entries[i].label,
+			fallback);
+		if (strcmp(base, other) == 0)
+			owners++;
+	}
+	return owners == 1;
+}
+
+static int cgba_state_path_legacy_name(uint16_t *path, unsigned slot)
+{
+	char base[FXCG100_SAVE_BASE_LEGACY_LEN + 1];
+	char suffix[] = "0.SVS";
+
+	if (!cgba_legacy_save_base(base, "CGBA"))
+		return 0;
+	suffix[0] = (char)('0' + (slot % 10));
+	return fxcg100_storage_path(path, CGBA_SAVE_PATH_MAX, base, suffix);
 }
 
 static void cgba_state_path_legacy(uint16_t *path, unsigned slot)
@@ -1190,6 +1216,8 @@ int cgba_gpsp_state_load(unsigned slot)
 
 	cgba_state_path(path, slot);
 	ok = cgba_state_load_from(path);
+	if (!ok && cgba_state_path_legacy_name(path, slot))
+		ok = cgba_state_load_from(path);   /* pre-hash 6-character name */
 	if (!ok) {                              /* legacy fixed-name fallback */
 		cgba_state_path_legacy(path, slot);
 		ok = cgba_state_load_from(path);
@@ -1206,35 +1234,12 @@ int cgba_gpsp_state_load(unsigned slot)
 
 /* ---- GBA in-game backup save (SRAM / Flash / EEPROM) persistence ---------- */
 /* The live save lives in gpSP's gamepak_backup[]; it is loaded when a ROM boots
- * and written back to \\fls0\<BASE>.SAV (BASE = the ROM stem, matching the
- * savestate naming) when it changes. Nothing wrote it to storage before, so
- * in-game saves were lost on power-off. */
+ * and written back to \\fls0\<BASE>.SAV (BASE matches the savestate naming)
+ * when it changes. Nothing wrote it to storage before, so in-game saves were
+ * lost on power-off. */
 static void cgba_backup_path(uint16_t *path)
 {
-	static const char prefix[] = "\\\\fls0\\";
-	const char *nm = cgba_gpsp_rom_name(cgba_loaded_rom_id);
-	char base[7];
-	unsigned i, b = 0;
-
-	for (i = 0; nm && nm[i] && nm[i] != '.' && b < 6; i++) {
-		char c = nm[i];
-		if (c >= 'a' && c <= 'z')
-			c = (char)(c - 'a' + 'A');
-		if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))
-			base[b++] = c;
-	}
-	if (b == 0) {
-		base[0] = 'G'; base[1] = 'A'; base[2] = 'M'; base[3] = 'E';
-		b = 4;
-	}
-	base[b] = 0;
-
-	for (i = 0; prefix[i]; i++)
-		path[i] = (uint16_t)prefix[i];
-	for (b = 0; base[b]; b++)
-		path[i++] = (uint16_t)base[b];
-	path[i++] = '.'; path[i++] = 'S'; path[i++] = 'A'; path[i++] = 'V';
-	path[i] = 0;
+	fxcg100_storage_path(path, CGBA_SAVE_PATH_MAX, cgba_save_base_name, ".SAV");
 }
 
 /* Bytes of gamepak_backup the current game actually uses, by detected type. */
@@ -1250,22 +1255,33 @@ static unsigned cgba_backup_size(void)
 
 void cgba_gpsp_backup_load(void)
 {
-	uint16_t path[24];
+	uint16_t path[CGBA_SAVE_PATH_MAX];
+	char legacy[FXCG100_SAVE_BASE_LEGACY_LEN + 1];
+	int from_legacy = 0;
 	int fsz;
 
 	cgba_backup_path(path);
 	fsz = fxcg100_storage_blob_size(path);
+	if (fsz < 0 && cgba_legacy_save_base(legacy, "GAME") &&
+			fxcg100_storage_path(path, CGBA_SAVE_PATH_MAX, legacy, ".SAV")) {
+		/* First boot since save names gained a hash: adopt the old file. */
+		fsz = fxcg100_storage_blob_size(path);
+		from_legacy = 1;
+	}
 	/* Load whatever the file holds; gpSP detects the type on first access and
-	 * reads it straight from gamepak_backup, so the bytes just need to be there. */
-	if (fsz > 0 && fsz <= (int)sizeof(gamepak_backup))
-		fxcg100_storage_read_blob(path, gamepak_backup, (unsigned)fsz);
+	 * reads it straight from gamepak_backup, so the bytes just need to be there.
+	 * An adopted legacy save is marked dirty so the next flush copies it to
+	 * the new name; the old file is left untouched. */
 	cgba_backup_dirty = 0;
+	if (fsz > 0 && fsz <= (int)sizeof(gamepak_backup) &&
+			fxcg100_storage_read_blob(path, gamepak_backup, (unsigned)fsz))
+		cgba_backup_dirty = from_legacy;
 }
 
 static void cgba_gpsp_backup_flush(void)
 {
 	unsigned sz = cgba_backup_size();
-	uint16_t path[24];
+	uint16_t path[CGBA_SAVE_PATH_MAX];
 	int wrote;
 
 	if (sz == 0)
@@ -1276,6 +1292,159 @@ static void cgba_gpsp_backup_flush(void)
 	wrote = fxcg100_storage_write_blob(path, gamepak_backup, sz);
 	if (cgba_refresh_rom_after_storage() && wrote)
 		cgba_backup_dirty = 0;
+}
+
+/* ---- cheats ----------------------------------------------------------------
+ * "<ROM name>.cht" next to the ROM (formats in fxcg100_gamefiles.h) fills up
+ * to FXCG100_CHEAT_SLOTS gpSP cheat slots when the game loads. The menu reads
+ * and toggles them through the fxcg100_cheat_* hooks below. */
+#define CGBA_CHEAT_FILE_MAX 0x10000u
+
+enum {
+	CGBA_CHEAT_OK = 0,
+	CGBA_CHEAT_UNSUPPORTED,
+	CGBA_CHEAT_ENCRYPTED
+};
+
+static char cgba_cheat_names[FXCG100_CHEAT_SLOTS][FXCG100_CHEAT_NAME_MAX];
+static uint8_t cgba_cheat_kind[FXCG100_CHEAT_SLOTS];
+static uint8_t cgba_cheat_on[FXCG100_CHEAT_SLOTS];
+static unsigned cgba_cheat_slots;    /* filled slots */
+static unsigned cgba_cheat_total;    /* cheats in the file, even past the slots */
+static char cgba_cheat_status_line[64];
+
+static void cgba_cheats_reset(void)
+{
+	cheat_clear();
+	cgba_cheat_slots = 0;
+	cgba_cheat_total = 0;
+	cgba_cheat_status_line[0] = 0;
+}
+
+/* Translated blocks only call the cheat engine at the master-code hook if it
+ * was installed before they were translated, so drop them when it moves. */
+static void cgba_cheats_hook_changed(u32 old_hook)
+{
+#ifdef CGBA_DYNAREC
+	if(cheat_master_hook != old_hook) {
+		flush_translation_cache_rom();
+		flush_translation_cache_ram();
+	}
+#else
+	(void)old_hook;
+#endif
+}
+
+static void cgba_cheat_sink(void *ctx, const char *name, const char *code,
+	int enabled)
+{
+	unsigned slot = cgba_cheat_slots;
+
+	(void)ctx;
+	cgba_cheat_total++;
+	if(slot >= FXCG100_CHEAT_SLOTS)
+		return;
+	cgba_cheat_slots++;
+	snprintf(cgba_cheat_names[slot], sizeof(cgba_cheat_names[slot]), "%s", name);
+	cgba_cheat_on[slot] = 0;
+	cgba_cheat_kind[slot] = CGBA_CHEAT_UNSUPPORTED;
+	if(!fxcg100_cheat_code_is_codebreaker(code))
+		return;
+	switch(cheat_parse(slot, code)) {
+	case CheatNoError:
+		cgba_cheat_kind[slot] = CGBA_CHEAT_OK;
+		if(enabled)
+			cgba_cheat_on[slot] = 1;
+		else
+			cheat_disable(slot);
+		break;
+	case CheatErrorEncrypted:
+		cgba_cheat_kind[slot] = CGBA_CHEAT_ENCRYPTED;
+		break;
+	default:
+		break;
+	}
+}
+
+static void cgba_gpsp_cheats_load(void)
+{
+	uint16_t path[CGBA_NOR_ROM_PATH_MAX];
+	char file[CGBA_NOR_ROM_LABEL_MAX];
+	u32 hook = cheat_master_hook;
+	u8 *buf;
+	int n = -1;
+
+	if(!cgba_current_nor_path[0] ||
+			!fxcg100_cheat_path(path, CGBA_NOR_ROM_PATH_MAX,
+				cgba_current_nor_path))
+		return;
+	fxcg100_cheat_file_label(file, sizeof file,
+		cgba_gpsp_rom_name(cgba_loaded_rom_id));
+
+	/* Guest execution has not started, so the GamePak fallback cache is free
+	 * to borrow exactly as savestates do. */
+	buf = cgba_gamepak_scratch_acquire(CGBA_CHEAT_FILE_MAX);
+	if(buf) {
+		n = fxcg100_storage_read_prefix(path, buf, CGBA_CHEAT_FILE_MAX);
+		if(n > 0)
+			fxcg100_cheats_parse((const char *)buf, (size_t)n,
+				cgba_cheat_sink, NULL);
+		cgba_gamepak_scratch_release();
+	}
+	cgba_cheats_hook_changed(hook);
+
+	if(n < 0)
+		snprintf(cgba_cheat_status_line, sizeof cgba_cheat_status_line,
+			"NO CHEATS: ADD %s", file);
+	else if(cgba_cheat_total > cgba_cheat_slots)
+		snprintf(cgba_cheat_status_line, sizeof cgba_cheat_status_line,
+			"FIRST %u OF %u CHEATS LOADED", cgba_cheat_slots,
+			cgba_cheat_total);
+	else
+		snprintf(cgba_cheat_status_line, sizeof cgba_cheat_status_line,
+			"%u CHEATS FROM %s", cgba_cheat_slots, file);
+}
+
+uint32_t fxcg100_cheat_count(void)
+{
+	return cgba_cheat_slots;
+}
+
+const char *fxcg100_cheat_name(uint32_t slot)
+{
+	return slot < cgba_cheat_slots ? cgba_cheat_names[slot] : NULL;
+}
+
+int fxcg100_cheat_state(uint32_t slot)
+{
+	if(slot >= cgba_cheat_slots)
+		return FXCG100_CHEAT_EMPTY;
+	if(cgba_cheat_kind[slot] == CGBA_CHEAT_ENCRYPTED)
+		return FXCG100_CHEAT_ENCRYPTED;
+	if(cgba_cheat_kind[slot] != CGBA_CHEAT_OK)
+		return FXCG100_CHEAT_UNSUPPORTED;
+	return cgba_cheat_on[slot] ? FXCG100_CHEAT_ON : FXCG100_CHEAT_OFF;
+}
+
+int fxcg100_cheat_toggle(uint32_t slot)
+{
+	int state = fxcg100_cheat_state(slot);
+	u32 hook = cheat_master_hook;
+
+	if(state == FXCG100_CHEAT_ON) {
+		cheat_disable(slot);
+		cgba_cheat_on[slot] = 0;
+	} else if(state == FXCG100_CHEAT_OFF && cheat_enable(slot)) {
+		cgba_cheat_on[slot] = 1;
+		cgba_cheats_hook_changed(hook);
+	}
+	return fxcg100_cheat_state(slot);
+}
+
+const char *fxcg100_cheat_status(void)
+{
+	return cgba_cheat_status_line[0] ? cgba_cheat_status_line
+		: "LOAD A GAME TO USE CHEATS";
 }
 
 void cgba_gpsp_run_frame(uint32_t gba_buttons, int render_video)

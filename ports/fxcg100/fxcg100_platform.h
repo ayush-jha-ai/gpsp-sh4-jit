@@ -71,8 +71,18 @@ typedef enum fxcg100_menu_result {
   FXCG100_MENU_QUIT,
   FXCG100_MENU_LOAD_GAME,
   FXCG100_MENU_LOAD_STATE,
-  FXCG100_MENU_SAVE_STATE
+  FXCG100_MENU_SAVE_STATE,
+  FXCG100_MENU_SAVE_EXIT
 } fxcg100_menu_result;
+
+/* Cheat slot states reported by fxcg100_cheat_state(). */
+enum {
+  FXCG100_CHEAT_EMPTY = -3,
+  FXCG100_CHEAT_ENCRYPTED = -2,
+  FXCG100_CHEAT_UNSUPPORTED = -1,
+  FXCG100_CHEAT_OFF = 0,
+  FXCG100_CHEAT_ON = 1
+};
 
 #define FXCG100_MENU_PAGE_SLOTS 5
 #define FXCG100_DEBUG_MENU_LINES 64
@@ -126,6 +136,9 @@ int fxcg100_config_save(const fxcg100_menu_state *state);
 int fxcg100_storage_blob_size(const uint16_t *path);
 int fxcg100_storage_read_blob(const uint16_t *path, void *dst, unsigned size);
 int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned size);
+/* Read the first min(file size, max) bytes of a file of any size (cheat
+ * files). Returns the byte count, or -1 if the file cannot be read. */
+int fxcg100_storage_read_prefix(const uint16_t *path, void *dst, unsigned max);
 /* Monotonic notification for successful or partially failed storage-mutation
  * attempts; direct NOR consumers use it to refresh only when necessary. */
 uint32_t fxcg100_storage_mutation_generation(void);
@@ -138,6 +151,14 @@ fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
 int fxcg100_menu_should_blit(fxcg100_menu_state *state, uint32_t frame);
 uint32_t fxcg100_rom_source_count(void);
 const char *fxcg100_rom_source_label(uint32_t index);
+
+/* Cheats for the loaded game, provided by the runner (the menu has weak
+ * defaults for builds without one). toggle() returns the new state. */
+uint32_t fxcg100_cheat_count(void);
+const char *fxcg100_cheat_name(uint32_t slot);
+int fxcg100_cheat_state(uint32_t slot);
+int fxcg100_cheat_toggle(uint32_t slot);
+const char *fxcg100_cheat_status(void);
 
 void fxcg100_lcd_init(void);
 void fxcg100_lcd_shutdown(void);

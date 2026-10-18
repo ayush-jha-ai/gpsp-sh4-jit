@@ -226,6 +226,17 @@ void cheat_disable(unsigned index)
    cheats[index].cheat_active = false;
 }
 
+/* Re-enable a cheat that cheat_parse() accepted earlier. Slots whose parse
+ * failed hold no codes (see cheat_parse), so they stay off. */
+bool cheat_enable(unsigned index)
+{
+   if (index >= MAX_CHEATS || cheats[index].cheat_count == 0)
+      return false;
+   cheats[index].cheat_active = true;
+   update_hook_codebreaker(&cheats[index]);
+   return true;
+}
+
 cheat_error cheat_parse(unsigned index, const char *code)
 {
    int pos = 0;
@@ -277,14 +288,19 @@ cheat_error cheat_parse(unsigned index, const char *code)
    {
       /* Check whether these cheats are readable */
       if (has_encrypted_codebreaker(ch))
+      {
+         ch->cheat_count = 0;
          return CheatErrorEncrypted;
+      }
       /* All codes were parsed! Process hook here */
       ch->cheat_active = true;
       update_hook_codebreaker(ch);
       return CheatNoError;
    }
 
-   /* TODO parse other types here */
+   /* TODO parse other types here. Drop the codes read before the failure so
+    * a half-parsed cheat can never be switched on with cheat_enable(). */
+   ch->cheat_count = 0;
    return CheatErrorNotSupported;
 }
 

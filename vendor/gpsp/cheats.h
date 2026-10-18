@@ -35,6 +35,7 @@ void process_cheats(void);
 cheat_error cheat_parse(unsigned index, const char *code);
 void cheat_clear(void);
 void cheat_disable(unsigned index);
+bool cheat_enable(unsigned index);
 
 extern u32 cheat_master_hook;
 

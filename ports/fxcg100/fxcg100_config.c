@@ -36,6 +36,8 @@ int fxcg100_storage_read_blob(const uint16_t *path, void *dst, unsigned size)
 { (void)path; (void)dst; (void)size; return 0; }
 int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned size)
 { (void)path; (void)src; (void)size; return 0; }
+int fxcg100_storage_read_prefix(const uint16_t *path, void *dst, unsigned max)
+{ (void)path; (void)dst; (void)max; return -1; }
 
 #else
 
@@ -366,6 +368,29 @@ int fxcg100_storage_read_blob(const uint16_t *path, void *dst, unsigned size)
   }
   os_bfile_close(fd);
   return ok;
+}
+
+int fxcg100_storage_read_prefix(const uint16_t *path, void *dst, unsigned max)
+{
+  int fd;
+  int size;
+  int want;
+
+  fd = os_bfile_open(path, CGBA_BFILE_READ_ONLY);
+  if (fd < 0)
+    return -1;
+  size = os_bfile_size(fd);
+  want = size < 0 ? -1 : (size < (int)max ? size : (int)max);
+  if (want > 0) {
+    int r = os_bfile_read(fd, dst, want, 0);
+
+    /* As in bfile_read_exact_ok: Fugue returns the bytes read, CASIOWIN the
+     * bytes left in the file after the read. */
+    if (r != want && r != size - want)
+      want = -1;
+  }
+  os_bfile_close(fd);
+  return want;
 }
 
 int fxcg100_storage_write_blob(const uint16_t *path, const void *src, unsigned size)

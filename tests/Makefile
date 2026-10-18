@@ -17,11 +17,11 @@ comma   := ,
 DEAD_STRIP := $(if $(filter Darwin,$(shell uname -s)),\
 	-Wl$(comma)-dead_strip,-Wl$(comma)--gc-sections)
 
-.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version lcd-cleanup scale rtc nor-world-switch cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
+.PHONY: all smoke audit core litpool thumb cond native-ldst input config-version gamefiles menu-cheats lcd-cleanup scale rtc nor-world-switch cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc \
 	swi-overlap swi-oam udiv udiv-emitter idle-signature video-opaque \
 	video-blend-cache video-backdrop-shadow arm-mixer clean
 
-all: smoke core litpool thumb cond native-ldst rtc nor-world-switch input config-version lcd-cleanup scale cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
+all: smoke core litpool thumb cond native-ldst rtc nor-world-switch input config-version gamefiles menu-cheats lcd-cleanup scale cycle exec jit-boundaries jit-safety jit-ram-flush memory-pc swi-overlap swi-oam udiv \
 	udiv-emitter idle-signature video-opaque video-blend-cache \
 	video-backdrop-shadow arm-mixer audit
 
@@ -72,6 +72,23 @@ config-version: $(ROOT)/tests/fxcg100_config_version_test.c \
 	$(CC) $(CFLAGS) -I$(ROOT) \
 	  $(ROOT)/tests/fxcg100_config_version_test.c -o $(BIN)-config-version
 	$(BIN)-config-version
+
+# Save names, cheat paths and the cheat-file parser (pure, host-only).
+gamefiles: $(ROOT)/tests/fxcg100_gamefiles_test.c \
+	   $(ROOT)/ports/fxcg100/fxcg100_gamefiles.c \
+	   $(ROOT)/ports/fxcg100/fxcg100_gamefiles.h
+	$(CC) $(CFLAGS) -I$(ROOT) $(ROOT)/tests/fxcg100_gamefiles_test.c \
+	  $(ROOT)/ports/fxcg100/fxcg100_gamefiles.c -o $(BIN)-gamefiles
+	$(BIN)-gamefiles
+
+# The real menu driven by scripted keys: cheats page and SAVE STATE AND EXIT.
+menu-cheats: $(ROOT)/tests/fxcg100_menu_cheats_test.c \
+	     $(ROOT)/ports/fxcg100/fxcg100_menu.c \
+	     $(ROOT)/ports/fxcg100/fxcg100_platform.h
+	$(CC) $(CFLAGS) -I$(ROOT) -I$(ROOT)/ports/fxcg100 \
+	  $(ROOT)/tests/fxcg100_menu_cheats_test.c \
+	  $(ROOT)/ports/fxcg100/fxcg100_menu.c -o $(BIN)-menu-cheats
+	$(BIN)-menu-cheats
 
 lcd-cleanup: $(ROOT)/tests/fxcg100_lcd_cleanup_test.c \
 	     $(ROOT)/ports/fxcg100/fxcg100_lcd_cleanup.h
@@ -262,6 +279,7 @@ audit: $(ROOT)/tests/sh4_codegen_audit.c $(ROOT)/ports/fxcg100/sh4/sh4_codegen.h
 clean:
 	rm -f $(BIN)-smoke $(BIN)-core $(BIN)-thumb $(BIN)-cond $(BIN)-native-ldst \
 	  $(BIN)-input $(BIN)-input-cg50 $(BIN)-config-version \
+	  $(BIN)-gamefiles $(BIN)-menu-cheats \
 	  $(BIN)-rtc $(BIN)-rtc-fxcg100 \
 	  $(BIN)-nor-world-switch $(BIN)-scale $(BIN)-cycle $(BIN)-exec \
 	  $(BIN)-jit-boundaries $(BIN)-jit-safety $(BIN)-jit-ram-flush \

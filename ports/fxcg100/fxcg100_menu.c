@@ -1,4 +1,5 @@
 #include "fxcg100_platform.h"
+#include "fxcg100_gamefiles.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -56,7 +57,8 @@ typedef enum menu_item_kind {
   MENU_ITEM_GBA_KEY,
   MENU_ITEM_HOTKEY,
   MENU_ITEM_DEBUG,
-  MENU_ITEM_INFO
+  MENU_ITEM_INFO,
+  MENU_ITEM_CHEAT
 } menu_item_kind;
 
 typedef enum menu_action_id {
@@ -71,7 +73,7 @@ typedef enum menu_action_id {
   MENU_ACTION_RESET_KEYS,
   MENU_ACTION_SAVE_CONFIG,
   MENU_ACTION_LOAD_CONFIG,
-  MENU_ACTION_CHEAT
+  MENU_ACTION_SAVE_EXIT
 } menu_action_id;
 
 typedef struct menu_item {
@@ -119,6 +121,35 @@ const char *__attribute__((weak)) fxcg100_rom_source_label(uint32_t index)
   return rom_options[index % count];
 }
 
+/* The runner fills the cheat slots when a game loads; these defaults keep
+ * the menu working in builds and tests without one. */
+uint32_t __attribute__((weak)) fxcg100_cheat_count(void)
+{
+  return 0;
+}
+
+const char *__attribute__((weak)) fxcg100_cheat_name(uint32_t slot)
+{
+  (void)slot;
+  return NULL;
+}
+
+int __attribute__((weak)) fxcg100_cheat_state(uint32_t slot)
+{
+  (void)slot;
+  return FXCG100_CHEAT_EMPTY;
+}
+
+int __attribute__((weak)) fxcg100_cheat_toggle(uint32_t slot)
+{
+  return fxcg100_cheat_state(slot);
+}
+
+const char *__attribute__((weak)) fxcg100_cheat_status(void)
+{
+  return "CHEATS ARE NOT AVAILABLE IN THIS BUILD";
+}
+
 static const char * const frameskip_options[] = {
   "AUTOMATIC",
   "MANUAL",
@@ -162,6 +193,8 @@ static const menu_item main_items[] = {
   { "RESTART GAME", MENU_ITEM_ACTION, MENU_ACTION_RESET,
     MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL },
   { "RETURN TO GAME", MENU_ITEM_ACTION, MENU_ACTION_RETURN,
+    MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL },
+  { "SAVE STATE AND EXIT", MENU_ITEM_ACTION, MENU_ACTION_SAVE_EXIT,
     MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL },
   { "EXIT GPSP", MENU_ITEM_ACTION, MENU_ACTION_QUIT,
     MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL }
@@ -306,30 +339,30 @@ static const menu_item gamepad_items[] = {
     MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL }
 };
 
+#define CHEAT_ITEM(slot) \
+  { "CHEAT", MENU_ITEM_CHEAT, MENU_ACTION_NONE, \
+    MENU_PAGE_CHEATS, MENU_VALUE_NONE, NULL, (slot), NULL }
+
 static const menu_item cheats_items[] = {
-  { "CHEAT 0", MENU_ITEM_INFO, MENU_ACTION_CHEAT,
-    MENU_PAGE_CHEATS, MENU_VALUE_NONE, NULL, 0, "NONE" },
-  { "CHEAT 1", MENU_ITEM_INFO, MENU_ACTION_CHEAT,
-    MENU_PAGE_CHEATS, MENU_VALUE_NONE, NULL, 0, "NONE" },
-  { "CHEAT 2", MENU_ITEM_INFO, MENU_ACTION_CHEAT,
-    MENU_PAGE_CHEATS, MENU_VALUE_NONE, NULL, 0, "NONE" },
-  { "CHEAT 3", MENU_ITEM_INFO, MENU_ACTION_CHEAT,
-    MENU_PAGE_CHEATS, MENU_VALUE_NONE, NULL, 0, "NONE" },
-  { "CHEAT 4", MENU_ITEM_INFO, MENU_ACTION_CHEAT,
-    MENU_PAGE_CHEATS, MENU_VALUE_NONE, NULL, 0, "NONE" },
-  { "CHEAT 5", MENU_ITEM_INFO, MENU_ACTION_CHEAT,
-    MENU_PAGE_CHEATS, MENU_VALUE_NONE, NULL, 0, "NONE" },
-  { "CHEAT 6", MENU_ITEM_INFO, MENU_ACTION_CHEAT,
-    MENU_PAGE_CHEATS, MENU_VALUE_NONE, NULL, 0, "NONE" },
-  { "CHEAT 7", MENU_ITEM_INFO, MENU_ACTION_CHEAT,
-    MENU_PAGE_CHEATS, MENU_VALUE_NONE, NULL, 0, "NONE" },
-  { "CHEAT 8", MENU_ITEM_INFO, MENU_ACTION_CHEAT,
-    MENU_PAGE_CHEATS, MENU_VALUE_NONE, NULL, 0, "NONE" },
-  { "CHEAT 9", MENU_ITEM_INFO, MENU_ACTION_CHEAT,
-    MENU_PAGE_CHEATS, MENU_VALUE_NONE, NULL, 0, "NONE" },
+  CHEAT_ITEM(0),
+  CHEAT_ITEM(1),
+  CHEAT_ITEM(2),
+  CHEAT_ITEM(3),
+  CHEAT_ITEM(4),
+  CHEAT_ITEM(5),
+  CHEAT_ITEM(6),
+  CHEAT_ITEM(7),
+  CHEAT_ITEM(8),
+  CHEAT_ITEM(9),
   { "BACK", MENU_ITEM_ACTION, MENU_ACTION_BACK,
     MENU_PAGE_MAIN, MENU_VALUE_NONE, NULL, 0, NULL }
 };
+
+#undef CHEAT_ITEM
+
+typedef char menu_cheat_slots_mismatch[
+  sizeof(cheats_items) / sizeof(cheats_items[0]) == FXCG100_CHEAT_SLOTS + 1 ?
+  1 : -1];
 
 static uint32_t *menu_value_ptr(fxcg100_menu_state *state, menu_value_id id)
 {
@@ -495,6 +528,40 @@ static void menu_adjust_value(fxcg100_menu_state *state, const menu_item *item,
     *value = (*value + 1) % count;
 }
 
+static const char *menu_cheat_state_label(int state)
+{
+  switch (state) {
+  case FXCG100_CHEAT_ON:
+    return "ON";
+  case FXCG100_CHEAT_OFF:
+    return "OFF";
+  case FXCG100_CHEAT_ENCRYPTED:
+    return "ENCRYPTED";
+  case FXCG100_CHEAT_UNSUPPORTED:
+    return "UNSUPPORTED";
+  default:
+    return "EMPTY";
+  }
+}
+
+/* EXE, LEFT and RIGHT all flip a cheat; the message explains slots that
+ * cannot be switched on. */
+static const char *menu_toggle_cheat(uint32_t slot)
+{
+  switch (fxcg100_cheat_toggle(slot)) {
+  case FXCG100_CHEAT_ON:
+    return "CHEAT ON";
+  case FXCG100_CHEAT_OFF:
+    return "CHEAT OFF";
+  case FXCG100_CHEAT_ENCRYPTED:
+    return "ENCRYPTED CODES ARE NOT SUPPORTED";
+  case FXCG100_CHEAT_UNSUPPORTED:
+    return "ONLY CODEBREAKER CODES ARE SUPPORTED";
+  default:
+    return fxcg100_cheat_status();
+  }
+}
+
 static void menu_format_item(fxcg100_menu_state *state, const menu_item *item,
                              char *line, size_t line_size)
 {
@@ -542,6 +609,16 @@ static void menu_format_item(fxcg100_menu_state *state, const menu_item *item,
     snprintf(line, line_size, "%s: %s", item->label,
              item->info ? item->info : "");
     break;
+  case MENU_ITEM_CHEAT: {
+    const char *name = fxcg100_cheat_name(item->count);
+
+    if (name)
+      snprintf(line, line_size, "%s: %s", name,
+               menu_cheat_state_label(fxcg100_cheat_state(item->count)));
+    else
+      snprintf(line, line_size, "CHEAT %u: EMPTY", (unsigned)item->count);
+    break;
+  }
   default:
     snprintf(line, line_size, "%s", item->label);
     break;
@@ -693,7 +770,10 @@ static fxcg100_menu_result menu_activate_item(fxcg100_menu_state *state,
   switch (item->kind) {
   case MENU_ITEM_SUBMENU:
     *page = item->submenu;
-    *message = "";
+    *message = item->submenu == MENU_PAGE_CHEATS ? fxcg100_cheat_status() : "";
+    return FXCG100_MENU_CONTINUE;
+  case MENU_ITEM_CHEAT:
+    *message = menu_toggle_cheat(item->count);
     return FXCG100_MENU_CONTINUE;
   case MENU_ITEM_CHOICE:
   case MENU_ITEM_NUMBER:
@@ -755,9 +835,8 @@ static fxcg100_menu_result menu_activate_item(fxcg100_menu_state *state,
     *message = fxcg100_config_load(state) ?
       "CONFIG LOADED" : "NO SAVED CONFIG";
     return FXCG100_MENU_CONTINUE;
-  case MENU_ACTION_CHEAT:
-    *message = "CHEAT LOADER TODO";
-    return FXCG100_MENU_CONTINUE;
+  case MENU_ACTION_SAVE_EXIT:
+    return FXCG100_MENU_SAVE_EXIT;
   case MENU_ACTION_NONE:
   default:
     return FXCG100_MENU_CONTINUE;
@@ -811,6 +890,9 @@ fxcg100_menu_result fxcg100_menu_run(fxcg100_menu_state *state,
     } else if (edge & FXCG100_APPKEY_DOWN) {
       state->selected[page] = (selected + 1) % (uint32_t)count;
       message = "";
+    } else if ((edge & (FXCG100_APPKEY_LEFT | FXCG100_APPKEY_RIGHT)) &&
+               items[selected].kind == MENU_ITEM_CHEAT) {
+      message = menu_toggle_cheat(items[selected].count);
     } else if (edge & FXCG100_APPKEY_LEFT) {
       menu_adjust_value(state, &items[selected], -1);
       message = "";
