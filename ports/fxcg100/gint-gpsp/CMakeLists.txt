@@ -35,6 +35,7 @@ set(PORT_SOURCES
   src/crash_panic.c
   ${FXCG100}/fxcg100_keys.c
   ${FXCG100}/fxcg100_config.c
+  ${FXCG100}/fxcg100_gamefiles.c
   ${FXCG100}/fxcg100_menu.c
   ${FXCG100}/fxcg100_gpsp_stubs.c
   ${FXCG100}/fxcg100_sound_stub.c

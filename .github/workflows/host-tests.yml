@@ -1,0 +1,41 @@
+name: Host tests
+
+# Builds and runs every target in tests/Makefile on each push and pull
+# request: the SH-4 code emitter audits, the JIT safety checks, the video and
+# RTC tests, and the menu, input, config and save-name tests. The encoder
+# audit compares against GNU as, provided here by Ubuntu's SH-4 binutils.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-tests:
+    name: Host tests (${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cc: gcc
+            cxx: g++
+          - cc: clang
+            cxx: clang++
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install SH-4 binutils for the encoder audit
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends binutils-sh4-linux-gnu
+
+      - name: Build and run the host tests
+        run: >
+          make -k -C tests
+          CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
+          SH_AS=sh4-linux-gnu-as SH_OBJCOPY=sh4-linux-gnu-objcopy

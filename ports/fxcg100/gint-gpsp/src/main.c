@@ -268,6 +268,28 @@ static int shutdown_gpsp_and_exit(int code)
 	return code;
 }
 
+/* SAVE+EXIT (hotkey or menu): write a state to the selected slot, then let
+ * the caller leave gpSP, which also flushes the in-game backup save. Returns
+ * 1 to exit and 0 to keep playing when the save failed, so a full storage
+ * memory never costs the player their progress. */
+static int save_state_before_exit(unsigned slot)
+{
+	char slot_line[32];
+
+	snprintf(slot_line, sizeof slot_line, "slot %u", slot);
+	draw_status("saving state before exit...", slot_line);
+	if(cgba_gpsp_state_save(slot))
+		return 1;
+	if(!cgba_gpsp_storage_sync()) {
+		draw_status("ROM remap FAILED", "restart or reset required");
+		wait_status();
+		return 1;
+	}
+	draw_status("state save FAILED", "not exiting, back to the game");
+	wait_status();
+	return 0;
+}
+
 static unsigned normalize_rom_id(unsigned rom_id)
 {
 	unsigned count = cgba_gpsp_rom_count();
@@ -2164,7 +2186,9 @@ int main(void)
 	menu_result = fxcg100_menu_run(&menu_state, 0, 0, NULL);
 	fxcg100_lcd_set_scale(menu_state.screen_scale);
 	fxcg100_lcd_set_filter(menu_state.screen_filter);
-	if(menu_result == FXCG100_MENU_QUIT)
+	/* No game is running yet, so SAVE+EXIT has nothing to save. */
+	if(menu_result == FXCG100_MENU_QUIT ||
+			menu_result == FXCG100_MENU_SAVE_EXIT)
 		return exit_to_os(1);
 	wait_for_keys_released();
 	previous_hotkeys = fxcg100_poll_hotkeys_mapped(menu_state.hotkey_map);
@@ -2248,6 +2272,12 @@ int main(void)
 				draw_status("ROM remap FAILED", "restart or reset required");
 				wait_status();
 				break;
+			}
+			if(result == FXCG100_MENU_SAVE_EXIT) {
+				if(save_state_before_exit(menu_state.savestate_slot))
+					break;
+				enter_gameplay_display(framebuffer, frame);
+				continue;
 			}
 			if(result == FXCG100_MENU_LOAD_STATE ||
 					result == FXCG100_MENU_SAVE_STATE) {
@@ -2335,8 +2365,8 @@ int main(void)
 #endif
 		}
 		if(hotkey_edge & FXCG100_HOTKEY_BIT(FXCG100_HOTKEY_SAVE_EXIT)) {
-			draw_status("save+exit unavailable", "not implemented yet");
-			wait_status();
+			if(save_state_before_exit(menu_state.savestate_slot))
+				break;
 			enter_gameplay_display(framebuffer, frame);
 		}
 

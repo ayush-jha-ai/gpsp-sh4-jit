@@ -49,8 +49,16 @@ static int run_diff(void)
   fwrite(asmbuf, 1, asmlen, f);
   fclose(f);
 
-  int rc = system("sh-elf-as --isa=sh4a -big -o /tmp/sh4_audit.o /tmp/sh4_audit.s"
-                  " && sh-elf-objcopy -O binary /tmp/sh4_audit.o /tmp/sh4_audit.bin");
+  /* SH_AS / SH_OBJCOPY pick another SH binutils (CI uses sh4-linux-gnu-*). */
+  const char *as = getenv("SH_AS");
+  const char *objcopy = getenv("SH_OBJCOPY");
+  char cmd[512];
+  snprintf(cmd, sizeof(cmd),
+           "%s --isa=sh4a -big -o /tmp/sh4_audit.o /tmp/sh4_audit.s"
+           " && %s -O binary /tmp/sh4_audit.o /tmp/sh4_audit.bin",
+           as && *as ? as : "sh-elf-as",
+           objcopy && *objcopy ? objcopy : "sh-elf-objcopy");
+  int rc = system(cmd);
   if (rc != 0) { fprintf(stderr, "assembler failed (rc=%d)\n", rc); return 1; }
 
   FILE *b = fopen("/tmp/sh4_audit.bin", "rb");
